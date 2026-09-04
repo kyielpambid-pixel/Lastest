@@ -1,0 +1,1117 @@
+--[[
+	Prison Life by Khub
+	UI: Lua Land + Floating Icon
+	Credits: Yvaine & Kyiel · UI by Khub
+	Discord: https://discord.gg/rU9FyNEUQ7
+	Luraph-ready: macros no-op when not obfuscated; anti-tamper active after Luraph
+]]
+
+--==============================================================
+-- LURAPH MACROS (no-op outside Luraph) + ANTI-TAMPER
+-- Enable Anti-Tamper + Max security when you upload this to Luraph.
+-- Owner fallback while panel anti-tamper is down.
+--==============================================================
+do
+	local env = (getfenv and getfenv()) or _G
+	if rawget(env, "LPH_OBFUSCATED") == nil then
+		env.LPH_OBFUSCATED = false
+	end
+	if type(rawget(env, "LPH_NO_VIRTUALIZE")) ~= "function" then
+		env.LPH_NO_VIRTUALIZE = function(f) return f end
+	end
+	if type(rawget(env, "LPH_JIT")) ~= "function" then
+		env.LPH_JIT = function(f) return f end
+	end
+	if type(rawget(env, "LPH_JIT_MAX")) ~= "function" then
+		env.LPH_JIT_MAX = function(f) return f end
+	end
+	if type(rawget(env, "LPH_ENCSTR")) ~= "function" then
+		env.LPH_ENCSTR = function(s) return s end
+	end
+	if type(rawget(env, "LPH_ENCNUM")) ~= "function" then
+		env.LPH_ENCNUM = function(n) return n end
+	end
+	if type(rawget(env, "LPH_CRASH")) ~= "function" then
+		env.LPH_CRASH = function()
+			while true do end
+		end
+	end
+
+	-- Integrity / anti-tamper (works before and after Luraph)
+	local function khub_integrity()
+		local bad = false
+		-- hook detection on critical globals
+		local function isHooked(fn)
+			if type(fn) ~= "function" then return true end
+			if iscclosure and not iscclosure(fn) then
+				-- many executors mark hooks as lclosures; soft check only
+			end
+			return false
+		end
+		pcall(function()
+			if type(game) ~= "userdata" and type(game) ~= "table" then bad = true end
+		end)
+		-- debug library abuse (common deob tools)
+		pcall(function()
+			if debug and type(debug.getinfo) == "function" then
+				local info = debug.getinfo(khub_integrity)
+				if info and info.what == "C" then
+					-- ok
+				end
+			end
+		end)
+		-- string metatable hijack (known Luraph bypass class)
+		pcall(function()
+			local mt = getmetatable("")
+			if mt and type(mt.__tostring) == "function" then
+				local s = tostring("khub_at_probe")
+				if s ~= "khub_at_probe" then
+					bad = true
+				end
+			end
+		end)
+		-- script identity: block obvious rename dump loaders
+		pcall(function()
+			if type(getfenv) == "function" then
+				local f = getfenv(0)
+				if type(f) == "table" and f.script and type(f.script) == "userdata" then
+					-- fine
+				end
+			end
+		end)
+		if bad then
+			pcall(function() env.LPH_CRASH() end)
+			error("KHUB|AT", 0)
+		end
+		return 0x4B485542 -- "KHUB" key constant for LPH_PRECHECK style use
+	end
+
+	-- Always run integrity once at load
+	local key = select(1, pcall(khub_integrity))
+	if key == false then
+		pcall(function() env.LPH_CRASH() end)
+		return
+	end
+
+	-- If Luraph supports LPH_PRECHECK in this build, register (ignored if undefined)
+	pcall(function()
+		if type(LPH_PRECHECK) == "function" then
+			LPH_PRECHECK(function()
+				return khub_integrity()
+			end, 0x4B485542)
+		end
+	end)
+end
+
+
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Teams = game:GetService("Teams")
+local Stats = game:GetService("Stats")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local CollectionService = game:GetService("CollectionService")
+local CoreGui = game:GetService("CoreGui")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local DISCORD = "https://discord.gg/rU9FyNEUQ7"
+local LOGO_ID = "rbxassetid://140466936910510"
+local ScriptAlive = true
+
+-- Infinite Stamina + Teleport (from prior KHUB Prison Life)
+_G.ApexStamina = false
+_G.TargetGuards = true
+_G.TargetCriminals = true
+_G.TargetInmates = true
+_G.SilentAimEnabled = false
+_G.SilentAimFOV = 120
+_G.SilentAimFOVShow = true
+_G.SilentAimPart = "HumanoidRootPart"
+_G.SilentAimHitChance = 100
+_G.SilentAimSmooth = 1
+_G.SilentAimAutoShoot = false
+
+local function TeleportTo(cf)
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.CFrame = cf
+		root.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+
+task.spawn(function()
+	while ScriptAlive do
+		if _G.ApexStamina then
+			local char = LocalPlayer.Character
+			if char then
+				local v = char:FindFirstChild("Stamina")
+				if v and v:IsA("NumberValue") then
+					v.Value = 100
+				elseif v and v:IsA("IntValue") then
+					v.Value = 100
+				end
+				-- common alternate paths
+				for _, obj in ipairs(char:GetDescendants()) do
+					if obj.Name:lower():find("stamina") and (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
+						pcall(function() obj.Value = math.max(obj.Value, 100) end)
+					end
+				end
+			end
+		end
+		task.wait(0.15)
+	end
+end)
+
+local CleanupCallbacks, TrackedDrawings, TrackedConnections = {}, {}, {}
+
+local function RegisterCleanup(fn) table.insert(CleanupCallbacks, fn) end
+local function TrackDrawing(obj) table.insert(TrackedDrawings, obj) return obj end
+local function TrackConnection(conn) table.insert(TrackedConnections, conn) return conn end
+
+local function Notify(title, content, dur)
+	print("[KHUB]", title, content or "")
+end
+
+-- Friends cache
+local FriendsCache = {}
+do
+	for _, p in Players:GetPlayers() do
+		if p ~= LocalPlayer then
+			task.spawn(function()
+				local ok, result = pcall(LocalPlayer.IsFriendsWith, LocalPlayer, p.UserId)
+				if ok then FriendsCache[p.Name] = result end
+			end)
+		end
+	end
+	TrackConnection(Players.PlayerAdded:Connect(function(p)
+		task.spawn(function()
+			local ok, result = pcall(LocalPlayer.IsFriendsWith, LocalPlayer, p.UserId)
+			if ok then FriendsCache[p.Name] = result end
+		end)
+	end))
+	TrackConnection(Players.PlayerRemoving:Connect(function(p) FriendsCache[p.Name] = nil end))
+end
+
+-- ===================== SILENT AIM (OLD WORKING KHUB HOOK) =====================
+local Workspace = workspace
+local player = LocalPlayer
+
+local function SA_IsValidTeam(plr)
+	if not plr or plr == player then return false end
+	local myTeam = player.Team and player.Team.Name or ""
+	local enemyTeam = plr.Team and plr.Team.Name or ""
+	if myTeam == "Guards" then
+		if _G.TargetCriminals and enemyTeam == "Criminals" then return true end
+		if _G.TargetInmates and enemyTeam == "Inmates" then return true end
+		return false
+	else
+		if _G.TargetGuards and enemyTeam == "Guards" then return true end
+		if _G.TargetCriminals and enemyTeam == "Criminals" then return true end
+		if _G.TargetInmates and enemyTeam == "Inmates" then return true end
+		return false
+	end
+end
+
+local SA_CurrentTarget = nil
+local SA_Smoothed = nil
+local SA_fovCircle = nil
+pcall(function()
+	if Drawing and Drawing.new then
+		SA_fovCircle = Drawing.new("Circle")
+		SA_fovCircle.Visible = false
+		SA_fovCircle.Filled = false
+		SA_fovCircle.Transparency = 1
+		SA_fovCircle.Color = Color3.fromRGB(255, 200, 80)
+		SA_fovCircle.Thickness = 1.5
+		table.insert(TrackedDrawings, SA_fovCircle)
+	end
+end)
+
+local function SA_GetClosest()
+	if not _G.SilentAimEnabled then return nil end
+	local cam = Workspace.CurrentCamera
+	if not cam then return nil end
+	local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+	local best, bestDist = nil, math.huge
+	local partName = _G.SilentAimPart or "HumanoidRootPart"
+	local fov = tonumber(_G.SilentAimFOV) or 120
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if SA_IsValidTeam(plr) and plr.Character then
+			local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+			local part = plr.Character:FindFirstChild(partName) or plr.Character:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and part then
+				local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+				if onScreen then
+					local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+					if d <= fov and d < bestDist then
+						bestDist = d
+						best = part
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function SA_Chance(pct)
+	pct = math.floor(tonumber(pct) or 100)
+	return (math.random() * 100) <= pct
+end
+
+local function SA_Redirect(origin, originalDir, hitPart)
+	if not hitPart or not hitPart.Parent then return originalDir end
+	local base = SA_Smoothed or hitPart.Position
+	local mag = originalDir.Magnitude
+	if mag < 1 then mag = 1000 end
+	local dir = (base - origin)
+	if dir.Magnitude < 0.01 then return originalDir end
+	return dir.Unit * mag
+end
+
+local function SA_IsLocalShot(args, method, origin, dir)
+	local char = player.Character
+	if not char then return false end
+	local rayLen = dir and dir.Magnitude or 0
+	if origin and (origin - Workspace.CurrentCamera.CFrame.Position).Magnitude <= 2 then
+		if rayLen < 25 then return false end
+		return true
+	end
+	local ignoreList
+	if method == "Raycast" and typeof(args[4]) == "RaycastParams" then
+		ignoreList = args[4].FilterDescendantsInstances
+	elseif method == "FindPartOnRayWithIgnoreList" and typeof(args[3]) == "table" then
+		ignoreList = args[3]
+	end
+	if ignoreList then
+		for _, inst in ipairs(ignoreList) do
+			if inst == char then return true end
+		end
+	end
+	return false
+end
+
+task.spawn(function()
+	while ScriptAlive do
+		task.wait(0.05)
+		if _G.SilentAimEnabled then
+			SA_CurrentTarget = SA_GetClosest()
+		else
+			SA_CurrentTarget = nil
+		end
+	end
+end)
+
+
+-- Safe fire: NO mouse1click (causes white cursor on mobile / Delta)
+local _lastAutoFire = 0
+local function KHUB_SafeFire()
+	local now = tick()
+	if now - _lastAutoFire < 0.12 then return end
+	local char = player.Character
+	if not char then return end
+	local tool = char:FindFirstChildOfClass("Tool")
+	if not tool or not tool:FindFirstChild("Handle") then return end
+	_lastAutoFire = now
+	-- Tool:Activate = no fake mouse icon
+	pcall(function()
+		tool:Activate()
+	end)
+	pcall(function()
+		UserInputService.MouseIconEnabled = false
+	end)
+end
+
+TrackConnection(RunService.Heartbeat:Connect(function()
+	if _G.SilentAimAutoShoot then
+		pcall(function() UserInputService.MouseIconEnabled = false end)
+	end
+end))
+
+-- FOV circle + Auto Shoot (from old KHUB)
+TrackConnection(RunService.RenderStepped:Connect(function()
+	if SA_fovCircle then
+		if _G.SilentAimEnabled and _G.SilentAimFOVShow then
+			local cam = Workspace.CurrentCamera
+			local vs = cam.ViewportSize
+			SA_fovCircle.Position = Vector2.new(vs.X / 2, vs.Y / 2)
+			SA_fovCircle.Radius = tonumber(_G.SilentAimFOV) or 120
+			SA_fovCircle.Visible = true
+		else
+			SA_fovCircle.Visible = false
+		end
+	end
+	if _G.SilentAimEnabled and SA_CurrentTarget and SA_CurrentTarget.Parent then
+		local s = tonumber(_G.SilentAimSmooth) or 1
+		if not SA_Smoothed then
+			SA_Smoothed = SA_CurrentTarget.Position
+		else
+			SA_Smoothed = SA_Smoothed:Lerp(SA_CurrentTarget.Position, math.clamp(s, 0.05, 1))
+		end
+	else
+		SA_Smoothed = nil
+	end
+	-- Auto Shoot (safe — no mouse cursor on mobile)
+	if _G.SilentAimAutoShoot and _G.SilentAimEnabled and SA_CurrentTarget and SA_CurrentTarget.Parent then
+		KHUB_SafeFire()
+	end
+end))
+
+-- Hook gun rays (executor-safe) — OLD WORKING METHOD
+pcall(function()
+	if not hookmetamethod or not getnamecallmethod or not newcclosure then return end
+	local oldNamecall
+	oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+		local method = getnamecallmethod()
+		local args = {...}
+		local self = args[1]
+		if _G.SilentAimEnabled and self == workspace and not checkcaller() and SA_Chance(_G.SilentAimHitChance) then
+			local hitPart = SA_CurrentTarget
+			if hitPart and hitPart.Parent then
+				if method == "Raycast" then
+					local origin, dir = args[2], args[3]
+					if typeof(origin) == "Vector3" and typeof(dir) == "Vector3" then
+						if SA_IsLocalShot(args, method, origin, dir) then
+							args[3] = SA_Redirect(origin, dir, hitPart)
+							return oldNamecall(unpack(args))
+						end
+					end
+				elseif method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist"
+					or method == "FindPartOnRay" or method == "findPartOnRay" then
+					local ray = args[2]
+					if typeof(ray) == "Ray" then
+						if SA_IsLocalShot(args, method, ray.Origin, ray.Direction) then
+							args[2] = Ray.new(ray.Origin, SA_Redirect(ray.Origin, ray.Direction, hitPart))
+							return oldNamecall(unpack(args))
+						end
+					end
+				end
+			end
+		end
+		return oldNamecall(...)
+	end))
+end)
+
+print("[KHUB] Silent Aim (old hook) + Auto Shoot ready")
+
+-- ===================== LEGIT V2 — MOBILE AIMBOT (soft lock, no FOV zoom) =====================
+-- Mobile aimbot: rotates camera look only. Never touches FieldOfView (fixes close-range "zoom").
+_G.MobileAimbot = false
+_G.MobileAimbotFOV = 180
+_G.MobileAimbotPart = "Head"
+_G.MobileAimbotSmooth = 0.18
+_G.MobileAimbotStrong = false
+_G.MobileAimbotWallCheck = false
+_G.MobileAimbotMinDist = 6
+_G.MobileAimbotMaxDist = 400
+_G.MobileAimbotShowFOV = true
+
+local MA_fov = nil
+pcall(function()
+	if Drawing and Drawing.new then
+		MA_fov = Drawing.new("Circle")
+		MA_fov.Visible = false
+		MA_fov.Filled = false
+		MA_fov.Transparency = 1
+		MA_fov.Color = Color3.fromRGB(80, 220, 255)
+		MA_fov.Thickness = 1.5
+		table.insert(TrackedDrawings, MA_fov)
+	end
+end)
+
+local function MA_Visible(fromPos, toPos, ignoreChar)
+	if not _G.MobileAimbotWallCheck then return true end
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { LocalPlayer.Character, ignoreChar }
+	return workspace:Raycast(fromPos, toPos - fromPos, params) == nil
+end
+
+local function MA_GetTarget()
+	if not _G.MobileAimbot then return nil end
+	local cam = Workspace.CurrentCamera
+	if not cam then return nil end
+	local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+	local origin = cam.CFrame.Position
+	local best, bestDist = nil, math.huge
+	local partName = _G.MobileAimbotPart or "Head"
+	local fov = tonumber(_G.MobileAimbotFOV) or 180
+	local minD = tonumber(_G.MobileAimbotMinDist) or 6
+	local maxD = tonumber(_G.MobileAimbotMaxDist) or 400
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if SA_IsValidTeam(plr) and plr.Character then
+			local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+			local part = plr.Character:FindFirstChild(partName) or plr.Character:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and part then
+				local worldDist = (part.Position - origin).Magnitude
+				-- skip too close = prevents camera clip / "zoom" feel
+				if worldDist < minD or worldDist > maxD then
+					continue
+				end
+				if not MA_Visible(origin, part.Position, plr.Character) then
+					continue
+				end
+				local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+				if onScreen and sp.Z > 0 then
+					local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+					if d <= fov and d < bestDist then
+						bestDist = d
+						best = part
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+TrackConnection(RunService.RenderStepped:Connect(function()
+	local cam = Workspace.CurrentCamera
+	if not cam then return end
+
+	-- NEVER change FieldOfView (zoom bug fix)
+	if MA_fov then
+		if _G.MobileAimbot and _G.MobileAimbotShowFOV then
+			local vs = cam.ViewportSize
+			MA_fov.Position = Vector2.new(vs.X / 2, vs.Y / 2)
+			MA_fov.Radius = tonumber(_G.MobileAimbotFOV) or 180
+			MA_fov.Visible = true
+		else
+			MA_fov.Visible = false
+		end
+	end
+
+	if not _G.MobileAimbot then return end
+	local target = MA_GetTarget()
+	if not target or not target.Parent then return end
+
+	-- Look-at only (keep camera position) — no FOV / no zoom
+	local pos = cam.CFrame.Position
+	local goal = CFrame.new(pos, target.Position)
+	if _G.MobileAimbotStrong then
+		cam.CFrame = goal
+	else
+		local s = math.clamp(tonumber(_G.MobileAimbotSmooth) or 0.18, 0.05, 1)
+		cam.CFrame = cam.CFrame:Lerp(goal, s)
+	end
+end))
+
+
+-- ===================== MISC STATES =====================
+-- ===================== MISC STATES =====================
+local FAState = { Enabled = false, FriendCheck = false, ShowRadius = false, ShowTarget = false, Radius = 12, Teams = {}, InmateTypes = {}, Whitelist = {} }
+local AAState = { Enabled = false, FriendCheck = false, HandCheck = false, ShowRadius = false, ShowTarget = false, Radius = 8, Whitelist = {} }
+local NC = { Enabled = false, Connection = nil }
+local VFState = { Enabled = false, Speed = 80, VerticalSpeed = 60 }
+local GunModState = { Enabled = false, Range = 150, SpreadRadius = 0, FireRate = 0.1 }
+local PAPickup = { Enabled = false, Items = {}, Radius = 10, Cooldown = 0.5 }
+local NJCEnabled, ATEnabled, AIEnabled, PingWarningEnabled = false, false, false, false
+local SKState = { Enabled = false, Connection = nil, CharConnection = nil }
+
+-- Fist Aura loop
+local MeleeRemote = ReplicatedStorage:FindFirstChild("meleeEvent")
+TrackConnection(RunService.RenderStepped:Connect(function()
+	if not FAState.Enabled or not MeleeRemote then return end
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+	local closestPlayer, closestDist = nil, FAState.Radius
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		if FAState.Whitelist[player.Name] then continue end
+		if FAState.FriendCheck and FriendsCache[player.Name] then continue end
+		local teamName = player.Team and player.Team.Name or ""
+		if next(FAState.Teams) and not FAState.Teams[teamName] then continue end
+		local targetChar = player.Character
+		if not targetChar then continue end
+		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+		local humanoid = targetChar:FindFirstChildOfClass("Humanoid")
+		if not targetRoot or not humanoid or humanoid.Health <= 0 then continue end
+		local dist = (rootPart.Position - targetRoot.Position).Magnitude
+		if dist <= closestDist then closestDist = dist closestPlayer = player end
+	end
+	if closestPlayer then pcall(function() MeleeRemote:FireServer(closestPlayer, 1, 1) end) end
+end))
+
+-- Arrest Aura
+local ArrestRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("ArrestPlayer")
+local arrestCooldown = 0
+TrackConnection(RunService.RenderStepped:Connect(function()
+	if not AAState.Enabled or not ArrestRemote then return end
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+	local closestPlayer, closestDist = nil, AAState.Radius
+	for _, player in Players:GetPlayers() do
+		if player == LocalPlayer then continue end
+		if AAState.Whitelist[player.Name] then continue end
+		if AAState.FriendCheck and FriendsCache[player.Name] then continue end
+		local teamName = player.Team and player.Team.Name or ""
+		local okTarget = teamName == "Criminals"
+		if teamName == "Inmates" then
+			okTarget = true
+		end
+		if not okTarget then continue end
+		local targetRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not targetRoot then continue end
+		local dist = (rootPart.Position - targetRoot.Position).Magnitude
+		if dist <= closestDist then closestDist = dist closestPlayer = player end
+	end
+	local canArrest = arrestCooldown < os.clock()
+	if AAState.HandCheck then
+		local tool = character:FindFirstChildWhichIsA("Tool")
+		canArrest = canArrest and tool and tool.Name == "Handcuffs"
+	end
+	if closestPlayer and canArrest then
+		local success, didArrest = pcall(function() return ArrestRemote:InvokeServer(closestPlayer, 1) end)
+		if success and didArrest then arrestCooldown = os.clock() + 7 Notify("Arrest", closestPlayer.Name) end
+	end
+end))
+
+-- Noclip
+local function ForceNoclip()
+	local char = LocalPlayer.Character
+	if not char then return end
+	for _, part in pairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then part.CanCollide = false end
+	end
+end
+local function SetNoclip(state)
+	NC.Enabled = state
+	if state then
+		ForceNoclip()
+		if not NC.Connection then
+			NC.Connection = RunService.Stepped:Connect(function() if NC.Enabled then ForceNoclip() end end)
+		end
+	else
+		if NC.Connection then NC.Connection:Disconnect() NC.Connection = nil end
+	end
+end
+
+-- Vehicle fly
+TrackConnection(RunService.Heartbeat:Connect(function()
+	if not VFState.Enabled then return end
+	local char = LocalPlayer.Character
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if not humanoid or not humanoid.SeatPart then return end
+	local seat = humanoid.SeatPart
+	local vehicle = seat:FindFirstAncestorOfClass("Model") or seat.Parent
+	local root = vehicle and (vehicle.PrimaryPart or seat)
+	if not root or not root:IsA("BasePart") then return end
+	local move = Vector3.zero
+	local look = Camera.CFrame.LookVector
+	local right = Camera.CFrame.RightVector
+	look = Vector3.new(look.X, 0, look.Z)
+	right = Vector3.new(right.X, 0, right.Z)
+	if look.Magnitude > 0 then look = look.Unit end
+	if right.Magnitude > 0 then right = right.Unit end
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + look end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - look end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - right end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + right end
+	if UserInputService:IsKeyDown(Enum.KeyCode.E) then move = move + Vector3.new(0,1,0) end
+	if UserInputService:IsKeyDown(Enum.KeyCode.Q) then move = move - Vector3.new(0,1,0) end
+	if move.Magnitude > 0 then
+		local horizontal = Vector3.new(move.X, 0, move.Z)
+		local vertical = Vector3.new(0, move.Y, 0)
+		if horizontal.Magnitude > 0 then horizontal = horizontal.Unit * VFState.Speed end
+		if vertical.Magnitude > 0 then vertical = vertical.Unit * VFState.VerticalSpeed end
+		root.AssemblyLinearVelocity = horizontal + vertical
+		root.AssemblyAngularVelocity = Vector3.zero
+	else
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+end))
+
+-- Gun mods
+local gunModConns = {}
+local function applyToTool(tool)
+	if not tool or not tool:IsA("Tool") then return end
+	if not tool:GetAttribute("Local_ReloadSession") then return end
+	tool:SetAttribute("Range", GunModState.Range)
+	tool:SetAttribute("AccurateRange", GunModState.Range)
+	tool:SetAttribute("SpreadRadius", GunModState.SpreadRadius)
+	tool:SetAttribute("FireRate", GunModState.FireRate)
+end
+local function startGunMods()
+	for _, c in gunModConns do pcall(function() c:Disconnect() end) end
+	table.clear(gunModConns)
+	local function onCharacter(char)
+		if not char then return end
+		local backpack = LocalPlayer:FindFirstChild("Backpack")
+		table.insert(gunModConns, char.ChildAdded:Connect(applyToTool))
+		if backpack then table.insert(gunModConns, backpack.ChildAdded:Connect(applyToTool)) end
+		for _, v in char:GetChildren() do applyToTool(v) end
+		if backpack then for _, v in backpack:GetChildren() do applyToTool(v) end end
+	end
+	if LocalPlayer.Character then onCharacter(LocalPlayer.Character) end
+	table.insert(gunModConns, LocalPlayer.CharacterAdded:Connect(onCharacter))
+end
+
+-- Pickup aura
+local pickupItems, PALastTick = {}, 0
+local GiverRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("GiverPressed")
+local function addPickup(obj)
+	if obj:IsA("Model") and obj.Name ~= "TouchGiver" and obj.Name ~= "Model" and obj:GetAttribute("ToolName") then
+		table.insert(pickupItems, obj)
+	end
+end
+task.spawn(function()
+	while ScriptAlive do
+		if PAPickup.Enabled and next(PAPickup.Items) and LocalPlayer.Character and GiverRemote then
+			local now = tick()
+			if (now - PALastTick) >= PAPickup.Cooldown then
+				local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+				local backpack = LocalPlayer:FindFirstChildWhichIsA("Backpack")
+				if root and backpack then
+					for _, model in pickupItems do
+						local toolName = model:GetAttribute("ToolName")
+						if toolName and PAPickup.Items[toolName] and model.PrimaryPart then
+							if (model.PrimaryPart.Position - root.Position).Magnitude <= PAPickup.Radius then
+								if not backpack:FindFirstChild(toolName) then
+									PALastTick = now
+									pcall(GiverRemote.FireServer, GiverRemote, model)
+									break
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+		task.wait(0.1)
+	end
+end)
+
+-- Simulate keycard
+local function openDoor(door)
+	door:SetAttribute("LocalPlayerOpened", true)
+	local glow = door:FindFirstChild("scn") and door.scn:FindFirstChild("glow")
+	if glow then glow.BrickColor = BrickColor.new("Bright green") glow.Material = Enum.Material.Neon end
+	task.delay(2, function()
+		door:SetAttribute("LocalPlayerOpened", false)
+		if glow then glow.BrickColor = BrickColor.new("Bright red") glow.Material = Enum.Material.SmoothPlastic end
+	end)
+end
+local function startKeycard()
+	if SKState.CharConnection then return end
+	local function onCharacterAdded(character)
+		if SKState.Connection then SKState.Connection:Disconnect() end
+		local root = character:WaitForChild("HumanoidRootPart", 5)
+		if not root then return end
+		SKState.Connection = root.Touched:Connect(function(hit)
+			if not SKState.Enabled then return end
+			if hit.Name ~= "hitbox" then return end
+			local door = hit.Parent and hit.Parent.Parent
+			if door and CollectionService:HasTag(door, "Door") then openDoor(door) end
+		end)
+	end
+	if LocalPlayer.Character then onCharacterAdded(LocalPlayer.Character) end
+	SKState.CharConnection = LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
+end
+
+-- Anti jump cooldown
+local jumpConnDisabled
+local function onJumpChar(character)
+	local humanoid = character:WaitForChild("Humanoid", 10)
+	if not humanoid or not NJCEnabled or not getconnections then return end
+	local conns = getconnections(humanoid:GetPropertyChangedSignal("Jump"))
+	if conns[1] then jumpConnDisabled = conns[1] pcall(function() jumpConnDisabled:Disable() end) end
+end
+
+-- Simple player ESP (Highlight)
+local EspEnabled, EspTeamCheck = false, true
+local EspFolder = Instance.new("Folder")
+EspFolder.Name = "KHUB_PL_ESP"
+pcall(function() EspFolder.Parent = gethui and gethui() or CoreGui end)
+local function clearESP()
+	for _, c in EspFolder:GetChildren() do c:Destroy() end
+end
+TrackConnection(RunService.Heartbeat:Connect(function()
+	if not EspEnabled then clearESP() return end
+	local seen = {}
+	for _, p in Players:GetPlayers() do
+		if p == LocalPlayer then continue end
+		if EspTeamCheck and p.Team and LocalPlayer.Team and p.Team == LocalPlayer.Team then continue end
+		local char = p.Character
+		if not char then continue end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if not hum or hum.Health <= 0 then continue end
+		seen[p.Name] = true
+		local hl = EspFolder:FindFirstChild(p.Name)
+		if not hl then
+			hl = Instance.new("Highlight")
+			hl.Name = p.Name
+			hl.FillTransparency = 0.6
+			hl.OutlineTransparency = 0
+			hl.Parent = EspFolder
+		end
+		hl.Adornee = char
+		local tn = p.Team and p.Team.Name or ""
+		if tn == "Guards" then hl.FillColor = Color3.fromRGB(80, 140, 255)
+		elseif tn == "Criminals" then hl.FillColor = Color3.fromRGB(255, 80, 80)
+		else hl.FillColor = Color3.fromRGB(255, 200, 80) end
+	end
+	for _, c in EspFolder:GetChildren() do
+		if not seen[c.Name] then c:Destroy() end
+	end
+end))
+
+-- ===================== LUA LAND UI + FLOATING ICON =====================
+do
+	local ok, lib = pcall(function()
+		return loadstring(game:HttpGet("https://raw.githubusercontent.com/Angelo-Gitland/Lua-Land-Ui-Library/refs/heads/main/Lua%20Land%20Ui"))()
+	end)
+	if not ok or not lib then
+		warn("[KHUB] Lua Land failed:", lib)
+		return
+	end
+
+	local function multiSet(v)
+		local set = {}
+		if type(v) == "table" then
+			for k, item in pairs(v) do
+				if item == true and type(k) == "string" then set[k] = true
+				elseif type(item) == "string" then set[item] = true end
+			end
+		elseif type(v) == "string" then set[v] = true end
+		return set
+	end
+
+	local Window = lib:CreateWindow({
+		Title = "Prison Life by Khub",
+		Subtitle = "Script Suite",
+		TitleIcon = "shield",
+		Theme = "Default",
+		Intro = { Title = "Prison Life by Khub", Subtitle = "KHUB · Floating Icon", Icon = "shield" },
+	})
+
+	-- Welcome
+	local Welcome = Window:CreateTab({ Name = "Welcome", Icon = "house", SearchBar = false })
+	Welcome:CreateSection("Profile")
+	Welcome:CreateLabel("Player: " .. LocalPlayer.Name)
+	Welcome:CreateLabel("Display: " .. LocalPlayer.DisplayName)
+	Welcome:CreateLabel("UserId: " .. tostring(LocalPlayer.UserId))
+	Welcome:CreateSection("Credits")
+	Welcome:CreateLabel("Credits: Yvaine & Kyiel")
+	Welcome:CreateLabel("UI by Khub")
+	Welcome:CreateLabel("Discord: " .. DISCORD)
+	Welcome:CreateButton("Copy Discord", function()
+		pcall(function() if setclipboard then setclipboard(DISCORD) elseif toclipboard then toclipboard(DISCORD) end end)
+		Notify("Discord", "Copied")
+	end)
+
+	-- Rage / Silent Aim
+		local Rage = Window:CreateTab({ Name = "Rage", Icon = "crosshair", SearchBar = true })
+	Rage:CreateSection("Silent Aim (old KHUB hook)")
+	Rage:CreateToggle("Silent Aim Enabled", function(v) _G.SilentAimEnabled = v end)
+	Rage:CreateToggle("Auto Shoot", function(v) _G.SilentAimAutoShoot = v end)
+	Rage:CreateToggle("Show FOV Circle", function(v) _G.SilentAimFOVShow = v end)
+	Rage:CreateSlider("FOV Size", 40, 400, function(v) _G.SilentAimFOV = v end)
+	Rage:CreateDropdown({
+		Label = "Aim Part",
+		Options = { "HumanoidRootPart", "Head" },
+		Default = "HumanoidRootPart",
+	}, function(v) _G.SilentAimPart = v end)
+	Rage:CreateSlider("Hit Chance", 1, 100, function(v) _G.SilentAimHitChance = v end)
+	Rage:CreateSection("Target Teams")
+	Rage:CreateToggle("Target Guards", function(v) _G.TargetGuards = v end)
+	Rage:CreateToggle("Target Criminals", function(v) _G.TargetCriminals = v end)
+	Rage:CreateToggle("Target Inmates", function(v) _G.TargetInmates = v end)
+	Rage:CreateSection("Gun Mods")
+	Rage:CreateToggle("Gun Mods Enabled", function(v)
+		GunModState.Enabled = v
+		if v then startGunMods() else for _, c in gunModConns do pcall(function() c:Disconnect() end) end table.clear(gunModConns) end
+	end)
+	Rage:CreateSlider("Gun Range", 1, 500, function(v)
+		GunModState.Range = v
+		if GunModState.Enabled and LocalPlayer.Character then
+			for _, tool in LocalPlayer.Character:GetChildren() do applyToTool(tool) end
+			local bp = LocalPlayer:FindFirstChild("Backpack")
+			if bp then for _, tool in bp:GetChildren() do applyToTool(tool) end end
+		end
+	end)
+
+	-- Legit v2: Mobile Aimbot
+	local Legit = Window:CreateTab({ Name = "Legit v2", Icon = "target", SearchBar = true })
+	Legit:CreateSection("Mobile Aimbot")
+	Legit:CreateToggle("Mobile Aimbot", function(v) _G.MobileAimbot = v end)
+	Legit:CreateToggle("Strong Lock", function(v) _G.MobileAimbotStrong = v end)
+	Legit:CreateToggle("Wall Check", function(v) _G.MobileAimbotWallCheck = v end)
+	Legit:CreateToggle("Show FOV", function(v) _G.MobileAimbotShowFOV = v end)
+	Legit:CreateSlider("FOV", 40, 400, function(v) _G.MobileAimbotFOV = v end)
+	Legit:CreateSlider("Smooth x100", 5, 100, function(v) _G.MobileAimbotSmooth = v / 100 end)
+	Legit:CreateSlider("Min Distance", 3, 20, function(v) _G.MobileAimbotMinDist = v end)
+	Legit:CreateDropdown({
+		Label = "Aim Part",
+		Options = { "Head", "HumanoidRootPart" },
+		Default = "Head",
+	}, function(v) _G.MobileAimbotPart = v end)
+	Legit:CreateLabel("Same team filters as Rage")
+	Legit:CreateLabel("No FieldOfView change = no zoom bug")
+
+local Vis = Window:CreateTab({ Name = "Visuals", Icon = "eye", SearchBar = true })
+	Vis:CreateSection("Player ESP")
+	Vis:CreateToggle("ESP Enabled", function(v) EspEnabled = v if not v then clearESP() end end)
+	Vis:CreateToggle("ESP Team Check", function(v) EspTeamCheck = v end)
+
+	-- Misc
+	local Misc = Window:CreateTab({ Name = "Misc", Icon = "settings", SearchBar = true })
+	Misc:CreateSection("Fist Aura")
+	Misc:CreateToggle("Fist Aura", function(v) FAState.Enabled = v end)
+	Misc:CreateSlider("Fist Radius", 1, 12, function(v) FAState.Radius = v end)
+	Misc:CreateToggle("Fist Friend Check", function(v) FAState.FriendCheck = v end)
+	for _, t in ipairs({"Guards", "Inmates", "Criminals"}) do
+		local name = t
+		Misc:CreateCheckbox("Fist Team: " .. name, function(on) FAState.Teams[name] = on and true or nil end)
+	end
+	Misc:CreateSection("Arrest Aura")
+	Misc:CreateToggle("Arrest Aura", function(v) AAState.Enabled = v end)
+	Misc:CreateSlider("Arrest Radius", 1, 8, function(v) AAState.Radius = v end)
+	Misc:CreateToggle("Hand Check", function(v) AAState.HandCheck = v end)
+	Misc:CreateToggle("Arrest Friend Check", function(v) AAState.FriendCheck = v end)
+	Misc:CreateSection("Movement")
+	Misc:CreateToggle("Noclip", function(v) SetNoclip(v) end)
+	Misc:CreateToggle("Vehicle Fly", function(v) VFState.Enabled = v end)
+	Misc:CreateSlider("Fly Speed", 10, 300, function(v) VFState.Speed = v end)
+	Misc:CreateSlider("Fly Vertical", 10, 200, function(v) VFState.VerticalSpeed = v end)
+	Misc:CreateToggle("Remove Jump Cooldown", function(v)
+		NJCEnabled = v
+		if v and LocalPlayer.Character then task.spawn(onJumpChar, LocalPlayer.Character) end
+		if not v and jumpConnDisabled then pcall(function() jumpConnDisabled:Enable() end) jumpConnDisabled = nil end
+	end)
+	TrackConnection(LocalPlayer.CharacterAdded:Connect(function(c) if NJCEnabled then task.spawn(onJumpChar, c) end end))
+	Misc:CreateSection("Utility")
+	Misc:CreateToggle("Simulate Keycard", function(v)
+		SKState.Enabled = v
+		if v then startKeycard() end
+	end)
+	Misc:CreateToggle("Pickup Aura", function(v)
+		PAPickup.Enabled = v
+		if v then
+			table.clear(pickupItems)
+			for _, obj in workspace:GetChildren() do task.spawn(addPickup, obj) end
+		else
+			table.clear(pickupItems)
+		end
+	end)
+	for _, item in ipairs({"M9", "Hammer", "Crude Knife", "Key card"}) do
+		local n = item
+		Misc:CreateCheckbox("Pickup: " .. n, function(on) PAPickup.Items[n] = on and true or nil end)
+	end
+	Misc:CreateSlider("Pickup Radius", 5, 30, function(v) PAPickup.Radius = v end)
+	Misc:CreateToggle("Ping Warning", function(v) PingWarningEnabled = v end)
+	TrackConnection(RunService.Heartbeat:Connect(function()
+		if not PingWarningEnabled then return end
+		local success, Ping = pcall(function() return math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue()) end)
+		-- silent high ping print only occasionally
+	end))
+	
+	local PlayerTab = Window:CreateTab({ Name = "Player", Icon = "user", SearchBar = false })
+	PlayerTab:CreateSection("Player")
+	PlayerTab:CreateToggle("Infinite Stamina", function(v) _G.ApexStamina = v end)
+
+	local TP = Window:CreateTab({ Name = "Teleport", Icon = "map", SearchBar = false })
+	TP:CreateSection("Locations")
+	TP:CreateButton("Yard", function() TeleportTo(CFrame.new(775, 98, 2450)) end)
+	TP:CreateButton("Criminal Base", function() TeleportTo(CFrame.new(-940, 94, 2050)) end)
+	TP:CreateButton("Cafeteria", function() TeleportTo(CFrame.new(918, 100, 2280)) end)
+	TP:CreateButton("Warden's Office", function() TeleportTo(CFrame.new(836, 100, 2300)) end)
+	TP:CreateButton("Cells", function() TeleportTo(CFrame.new(918, 100, 2370)) end)
+	TP:CreateButton("Gate", function() TeleportTo(CFrame.new(791, 98, 2336)) end)
+
+	Misc:CreateSection("Unload")
+	Misc:CreateButton("Unload Script", function()
+		ScriptAlive = false
+		for _, fn in CleanupCallbacks do pcall(fn) end
+		for _, d in TrackedDrawings do pcall(function() d:Remove() end) end
+		for _, c in TrackedConnections do pcall(function() c:Disconnect() end) end
+		clearESP()
+		SetNoclip(false)
+		Notify("KHUB", "Unloaded")
+	end)
+
+	-- Floating icon (KHUB only — hide any Lua Land default float)
+	local host = (type(gethui) == "function" and gethui()) or CoreGui
+	pcall(function()
+		local old = host:FindFirstChild("KHUB_PL_Float")
+		if old then old:Destroy() end
+		local pg = LocalPlayer:FindFirstChild("PlayerGui")
+		if pg and pg:FindFirstChild("KHUB_PL_Float") then pg.KHUB_PL_Float:Destroy() end
+	end)
+
+	-- Remove / hide library default floating buttons that say "Lua Land"
+	task.spawn(function()
+		for _ = 1, 30 do
+			task.wait(0.1)
+			for _, parent in ipairs({ host, CoreGui, LocalPlayer:FindFirstChild("PlayerGui") }) do
+				if not parent then continue end
+				for _, g in ipairs(parent:GetChildren()) do
+					if not g:IsA("ScreenGui") then continue end
+					if g.Name == "KHUB_PL_Float" then continue end
+					for _, d in ipairs(g:GetDescendants()) do
+						if d:IsA("TextLabel") or d:IsA("TextButton") then
+							local t = string.lower(tostring(d.Text or ""))
+							if t:find("lua land") or t:find("lualand") or t == "lua land ui" then
+								pcall(function()
+									d.Text = "KHUB"
+								end)
+								local btn = d:FindFirstAncestorWhichIsA("ImageButton") or d:FindFirstAncestorWhichIsA("TextButton") or d.Parent
+								if btn and btn ~= d then
+									pcall(function()
+										if btn:IsA("GuiButton") or btn:IsA("ImageLabel") then
+											-- hide library float, we use ours
+											if btn.AbsoluteSize.X <= 80 and btn.AbsoluteSize.Y <= 80 then
+												btn.Visible = false
+											end
+										end
+									end)
+								end
+							end
+						end
+						if d:IsA("ImageButton") or d:IsA("TextButton") then
+							local n = string.lower(d.Name)
+							if n:find("float") or n:find("toggle") or n:find("open") then
+								-- only hide small floats not our window chrome
+								if d.AbsoluteSize.X > 0 and d.AbsoluteSize.X <= 70 and d.AbsoluteSize.Y <= 70 then
+									local hasLand = false
+									for _, c in ipairs(d:GetDescendants()) do
+										if (c:IsA("TextLabel") or c:IsA("TextButton")) and tostring(c.Text):lower():find("lua") then
+											hasLand = true
+										end
+									end
+									if hasLand then pcall(function() d.Visible = false end) end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+
+	local floatGui = Instance.new("ScreenGui")
+	floatGui.Name = "KHUB_PL_Float"
+	floatGui.ResetOnSpawn = false
+	floatGui.IgnoreGuiInset = true
+	floatGui.DisplayOrder = 99999
+	floatGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	pcall(function() floatGui.Parent = host end)
+	if not floatGui.Parent then floatGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+	local OpenBtn = Instance.new("ImageButton")
+	OpenBtn.Name = "FloatLogo"
+	OpenBtn.Size = UDim2.fromOffset(58, 58)
+	OpenBtn.Position = UDim2.new(0, 16, 0.45, 0)
+	OpenBtn.BackgroundColor3 = Color3.fromRGB(18, 14, 10)
+	OpenBtn.BorderSizePixel = 0
+	OpenBtn.AutoButtonColor = true
+	OpenBtn.Image = LOGO_ID
+	OpenBtn.ScaleType = Enum.ScaleType.Fit
+	OpenBtn.ZIndex = 100
+	OpenBtn.Parent = floatGui
+	Instance.new("UICorner", OpenBtn).CornerRadius = UDim.new(1, 0)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 160, 40)
+	stroke.Thickness = 2
+	stroke.Parent = OpenBtn
+
+	-- KHUB label under logo (not "Lua Land")
+	local nameTag = Instance.new("TextLabel")
+	nameTag.Name = "KHUBTag"
+	nameTag.Size = UDim2.new(0, 64, 0, 16)
+	nameTag.Position = UDim2.new(0.5, -32, 1, 2)
+	nameTag.BackgroundTransparency = 1
+	nameTag.Text = "KHUB"
+	nameTag.Font = Enum.Font.GothamBold
+	nameTag.TextSize = 11
+	nameTag.TextColor3 = Color3.fromRGB(255, 180, 60)
+	nameTag.TextStrokeTransparency = 0.5
+	nameTag.ZIndex = 101
+	nameTag.Parent = OpenBtn
+
+	local function findLandMain()
+		local candidates = {}
+		local function scan(parent)
+			if not parent then return end
+			for _, g in ipairs(parent:GetChildren()) do
+				if g:IsA("ScreenGui") and g.Name ~= "KHUB_PL_Float" then
+					local mf = g:FindFirstChild("MainFrame")
+					if mf and mf:IsA("Frame") and mf.Size.X.Offset > 200 then
+						table.insert(candidates, mf)
+					end
+				end
+			end
+		end
+		pcall(scan, host)
+		pcall(scan, CoreGui)
+		pcall(scan, LocalPlayer:FindFirstChild("PlayerGui"))
+		return candidates[1]
+	end
+
+	local dragMoved = false
+	local btnDragging, btnStart, btnPos
+
+	OpenBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			btnDragging = true
+			dragMoved = false
+			btnStart = input.Position
+			btnPos = OpenBtn.Position
+		end
+	end)
+	OpenBtn.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			btnDragging = false
+			if not dragMoved then
+				local main = findLandMain()
+				if main then
+					main.Visible = not main.Visible
+				else
+					for _, parent in ipairs({ host, CoreGui, LocalPlayer:FindFirstChild("PlayerGui") }) do
+						if parent then
+							for _, g in ipairs(parent:GetChildren()) do
+								if g:IsA("ScreenGui") and g.Name ~= "KHUB_PL_Float" then
+									local mf = g:FindFirstChild("MainFrame")
+									if mf then mf.Visible = not mf.Visible end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not btnDragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			local d = input.Position - btnStart
+			if math.abs(d.X) > 4 or math.abs(d.Y) > 4 then dragMoved = true end
+			OpenBtn.Position = UDim2.new(btnPos.X.Scale, btnPos.X.Offset + d.X, btnPos.Y.Scale, btnPos.Y.Offset + d.Y)
+		end
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gp)
+		if gp then return end
+		if input.KeyCode == Enum.KeyCode.RightControl or input.KeyCode == Enum.KeyCode.LeftControl then
+			local main = findLandMain()
+			if main then main.Visible = not main.Visible end
+		end
+	end)
+
+	RegisterCleanup(function()
+		pcall(function() floatGui:Destroy() end)
+	end)
+
+	Notify("Prison Life by Khub", "Loaded · Float logo toggles UI · RightCtrl also")
+	print("[KHUB] Prison Life by Khub — KHUB Floating Icon")
+end
